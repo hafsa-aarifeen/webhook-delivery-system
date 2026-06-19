@@ -1,0 +1,20 @@
+# .NET build output
+bin/
+obj/
+*.user
+
+# Node / React
+node_modules/
+dist/
+*.local
+
+# Secrets / environment
+.env
+.env.*
+
+# Editor & OS files
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
