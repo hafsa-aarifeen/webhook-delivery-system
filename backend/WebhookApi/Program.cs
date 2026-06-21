@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using WebhookApi.Data;
 using WebhookApi.Models;
 using WebhookApi.Dtos;
+using WebhookApi.Filters;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -42,7 +43,8 @@ app.MapPost("/events", async (CreateEventRequest request, AppDbContext db) =>
     await db.SaveChangesAsync();
 
     return Results.Created($"/events/{newEvent.Id}", newEvent);
-});
+})
+.AddEndpointFilter<ApiKeyEndpointFilter>();
 
 app.MapGet("/events", async (AppDbContext db) =>
     await db.Events.OrderByDescending(e => e.CreatedAt).ToListAsync());
