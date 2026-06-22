@@ -4,6 +4,7 @@ using WebhookApi.Models;
 using WebhookApi.Dtos;
 using WebhookApi.Filters;
 using WebhookApi.Workers;
+using System.Security.Cryptography;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -66,6 +67,9 @@ app.MapPost("/subscriptions", async (CreateSubscriptionRequest request, AppDbCon
     if (!Uri.TryCreate(request.Url, UriKind.Absolute, out _))
         return Results.BadRequest(new { error = "Url must be a valid absolute URL (e.g. https://example.com/hook)." });
 
+    // A unique signing key for this subscriber, shown once on creation.
+    var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+
     var subscription = new Subscription
     {
         Id = Guid.NewGuid(),
@@ -73,6 +77,7 @@ app.MapPost("/subscriptions", async (CreateSubscriptionRequest request, AppDbCon
         Url = request.Url,
         EventType = request.EventType,
         IsActive = true,
+        Secret = secret,
         CreatedAt = DateTime.UtcNow
     };
 
@@ -83,7 +88,17 @@ app.MapPost("/subscriptions", async (CreateSubscriptionRequest request, AppDbCon
 });
 
 app.MapGet("/subscriptions", async (AppDbContext db) =>
-    await db.Subscriptions.ToListAsync());
+    await db.Subscriptions
+        .Select(s => new
+        {
+            s.Id,
+            s.Name,
+            s.Url,
+            s.EventType,
+            s.IsActive,
+            s.CreatedAt
+        })
+        .ToListAsync());
 
 app.MapDelete("/subscriptions/{id:guid}", async (Guid id, AppDbContext db) =>
 {
@@ -100,7 +115,8 @@ app.MapPost("/test-receiver", async (HttpContext context, ILogger<Program> logge
 {
     using var reader = new StreamReader(context.Request.Body);
     var body = await reader.ReadToEndAsync();
-    logger.LogInformation("Test receiver got a webhook: {Body}", body);
+    var signature = context.Request.Headers["X-Signature"].ToString();
+    logger.LogInformation("Test receiver got a webhook. Signature: {Sig} Body: {Body}", signature, body);
     return Results.Ok(new { received = true });
 });
 

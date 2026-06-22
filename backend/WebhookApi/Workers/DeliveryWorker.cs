@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using WebhookApi.Data;
 using WebhookApi.Models;
+using System.Security.Cryptography;
 
 namespace WebhookApi.Workers;
 
@@ -158,8 +159,14 @@ public class DeliveryWorker : BackgroundService
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var content = new StringContent(payload, Encoding.UTF8, "application/json");
-            var response = await client.PostAsync(sub.Url, content, ct);
+            var request = new HttpRequestMessage(HttpMethod.Post, sub.Url)
+            {
+                Content = new StringContent(payload, Encoding.UTF8, "application/json")
+            };
+            var signature = ComputeSignature(payload, sub.Secret);
+            request.Headers.Add("X-Signature", $"sha256={signature}");
+
+            var response = await client.SendAsync(request, ct);
             stopwatch.Stop();
 
             var body = await response.Content.ReadAsStringAsync(ct);
@@ -177,5 +184,12 @@ public class DeliveryWorker : BackgroundService
             attempt.DurationMs = (int)stopwatch.ElapsedMilliseconds;
             return (false, attempt);
         }
+    }
+
+    private static string ComputeSignature(string payload, string secret)
+    {
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+        var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(payload));
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 }
