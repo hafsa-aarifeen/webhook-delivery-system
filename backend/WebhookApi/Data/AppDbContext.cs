@@ -12,4 +12,5 @@ public class AppDbContext : DbContext
     public DbSet<Event> Events => Set<Event>();
     public DbSet<Subscription> Subscriptions => Set<Subscription>();
     public DbSet<DeliveryAttempt> DeliveryAttempts => Set<DeliveryAttempt>();
+    public DbSet<Delivery> Deliveries => Set<Delivery>();
 }

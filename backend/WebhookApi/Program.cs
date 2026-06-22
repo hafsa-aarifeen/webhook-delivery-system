@@ -104,6 +104,25 @@ app.MapPost("/test-receiver", async (HttpContext context, ILogger<Program> logge
     return Results.Ok(new { received = true });
 });
 
+app.MapPost("/test-receiver/fail", (ILogger<Program> logger) =>
+{
+    logger.LogInformation("Failing receiver: returning 500.");
+    return Results.StatusCode(500);
+});
+
+var flakyCount = 0;
+app.MapPost("/test-receiver/flaky", (ILogger<Program> logger) =>
+{
+    flakyCount++;
+    if (flakyCount % 3 != 0)
+    {
+        logger.LogInformation("Flaky receiver: FAIL (call #{Count})", flakyCount);
+        return Results.StatusCode(503);
+    }
+    logger.LogInformation("Flaky receiver: SUCCESS (call #{Count})", flakyCount);
+    return Results.Ok(new { received = true });
+});
+
 app.MapGet("/delivery-attempts", async (AppDbContext db) =>
 {
     var attempts = await (
