@@ -16,11 +16,24 @@ interface Subscription {
   createdAt: string;
 }
 
+interface DeliveryAttempt {
+  id: string;
+  eventType: string;
+  subscriber: string;
+  subscriberUrl: string | null;
+  success: boolean;
+  statusCode: number | null;
+  durationMs: number;
+  errorMessage: string | null;
+  attemptedAt: string;
+}
+
 const API_BASE = "http://localhost:5180";
 
 function App() {
   const [events, setEvents] = useState<EventItem[]>([]);
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [attempts, setAttempts] = useState<DeliveryAttempt[]>([]);
 
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
@@ -29,21 +42,32 @@ function App() {
 
   const loadSubscriptions = () => {
     fetch(`${API_BASE}/subscriptions`)
-      .then((res) => res.json())
+      .then((r) => r.json())
       .then(setSubscriptions)
       .catch(() => setSubscriptions([]));
   };
-
   const loadEvents = () => {
     fetch(`${API_BASE}/events`)
-      .then((res) => res.json())
+      .then((r) => r.json())
       .then(setEvents)
       .catch(() => setEvents([]));
   };
+  const loadAttempts = () => {
+    fetch(`${API_BASE}/delivery-attempts`)
+      .then((r) => r.json())
+      .then(setAttempts)
+      .catch(() => setAttempts([]));
+  };
 
   useEffect(() => {
-    loadEvents();
-    loadSubscriptions();
+    const loadAll = () => {
+      loadEvents();
+      loadSubscriptions();
+      loadAttempts();
+    };
+    loadAll();
+    const interval = setInterval(loadAll, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleAddSubscription = async () => {
@@ -53,13 +77,11 @@ function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, url, eventType }),
     });
-
     if (!res.ok) {
       const data = await res.json().catch(() => ({}) as { error?: string });
       setError(data.error ?? "Could not create subscription.");
       return;
     }
-
     setName("");
     setUrl("");
     setEventType("");
@@ -167,6 +189,48 @@ function App() {
           </table>
         )}
       </section>
+
+      <section style={{ marginTop: "2rem" }}>
+        <h2>Delivery Attempts ({attempts.length})</h2>
+        {attempts.length === 0 ? (
+          <p>No delivery attempts yet.</p>
+        ) : (
+          <table style={table}>
+            <thead>
+              <tr>
+                <th style={th}>Event</th>
+                <th style={th}>Subscriber</th>
+                <th style={th}>Result</th>
+                <th style={th}>Status</th>
+                <th style={th}>Duration</th>
+                <th style={th}>When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {attempts.map((a) => (
+                <tr key={a.id}>
+                  <td style={td}>{a.eventType}</td>
+                  <td style={td}>{a.subscriber}</td>
+                  <td
+                    style={{
+                      ...td,
+                      color: a.success ? "green" : "crimson",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {a.success ? "Success" : "Failed"}
+                  </td>
+                  <td style={td}>
+                    {a.statusCode ?? (a.errorMessage ? "error" : "-")}
+                  </td>
+                  <td style={td}>{a.durationMs} ms</td>
+                  <td style={td}>{new Date(a.attemptedAt).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
     </div>
   );
 }
@@ -174,7 +238,7 @@ function App() {
 const page: CSSProperties = {
   fontFamily: "sans-serif",
   padding: "2rem",
-  maxWidth: 900,
+  maxWidth: 1000,
   margin: "0 auto",
 };
 const table: CSSProperties = { width: "100%", borderCollapse: "collapse" };

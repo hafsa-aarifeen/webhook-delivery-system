@@ -3,11 +3,15 @@ using WebhookApi.Data;
 using WebhookApi.Models;
 using WebhookApi.Dtos;
 using WebhookApi.Filters;
+using WebhookApi.Workers;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+builder.Services.AddHttpClient();
+builder.Services.AddHostedService<DeliveryWorker>();
 
 builder.Services.AddCors(options =>
 {
@@ -90,6 +94,40 @@ app.MapDelete("/subscriptions/{id:guid}", async (Guid id, AppDbContext db) =>
     db.Subscriptions.Remove(subscription);
     await db.SaveChangesAsync();
     return Results.NoContent();
+});
+
+app.MapPost("/test-receiver", async (HttpContext context, ILogger<Program> logger) =>
+{
+    using var reader = new StreamReader(context.Request.Body);
+    var body = await reader.ReadToEndAsync();
+    logger.LogInformation("Test receiver got a webhook: {Body}", body);
+    return Results.Ok(new { received = true });
+});
+
+app.MapGet("/delivery-attempts", async (AppDbContext db) =>
+{
+    var attempts = await (
+        from a in db.DeliveryAttempts
+        join e in db.Events on a.EventId equals e.Id into eventGroup
+        from e in eventGroup.DefaultIfEmpty()
+        join s in db.Subscriptions on a.SubscriptionId equals s.Id into subGroup
+        from s in subGroup.DefaultIfEmpty()
+        orderby a.AttemptedAt descending
+        select new
+        {
+            a.Id,
+            eventType = e != null ? e.EventType : "(deleted event)",
+            subscriber = s != null ? s.Name : "(deleted subscriber)",
+            subscriberUrl = s != null ? s.Url : null,
+            a.Success,
+            a.StatusCode,
+            a.DurationMs,
+            a.ErrorMessage,
+            a.AttemptedAt
+        }
+    ).ToListAsync();
+
+    return attempts;
 });
 
 app.Run();
