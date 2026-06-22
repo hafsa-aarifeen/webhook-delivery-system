@@ -28,11 +28,23 @@ interface DeliveryAttempt {
   attemptedAt: string;
 }
 
+interface Delivery {
+  id: string;
+  eventType: string;
+  subscriber: string;
+  status: string;
+  attemptCount: number;
+  nextAttemptAt: string;
+  createdAt: string;
+  completedAt: string | null;
+}
+
 const API_BASE = "http://localhost:5180";
 
 function App() {
   const [events, setEvents] = useState<EventItem[]>([]);
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [attempts, setAttempts] = useState<DeliveryAttempt[]>([]);
 
   const [name, setName] = useState("");
@@ -52,6 +64,12 @@ function App() {
       .then(setEvents)
       .catch(() => setEvents([]));
   };
+  const loadDeliveries = () => {
+    fetch(`${API_BASE}/deliveries`)
+      .then((r) => r.json())
+      .then(setDeliveries)
+      .catch(() => setDeliveries([]));
+  };
   const loadAttempts = () => {
     fetch(`${API_BASE}/delivery-attempts`)
       .then((r) => r.json())
@@ -63,6 +81,7 @@ function App() {
     const loadAll = () => {
       loadEvents();
       loadSubscriptions();
+      loadDeliveries();
       loadAttempts();
     };
     loadAll();
@@ -91,6 +110,12 @@ function App() {
   const handleDelete = async (id: string) => {
     await fetch(`${API_BASE}/subscriptions/${id}`, { method: "DELETE" });
     loadSubscriptions();
+  };
+
+  const statusColor = (status: string): string => {
+    if (status === "Delivered") return "green";
+    if (status === "DeadLettered") return "crimson";
+    return "#b8860b"; // Pending — amber
   };
 
   return (
@@ -183,6 +208,50 @@ function App() {
                   <td style={td}>{e.eventType}</td>
                   <td style={td}>{e.payload}</td>
                   <td style={td}>{new Date(e.createdAt).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section style={{ marginTop: "2rem" }}>
+        <h2>Deliveries ({deliveries.length})</h2>
+        {deliveries.length === 0 ? (
+          <p>No deliveries yet.</p>
+        ) : (
+          <table style={table}>
+            <thead>
+              <tr>
+                <th style={th}>Event</th>
+                <th style={th}>Subscriber</th>
+                <th style={th}>Status</th>
+                <th style={th}>Attempts</th>
+                <th style={th}>Created</th>
+                <th style={th}>Completed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {deliveries.map((d) => (
+                <tr key={d.id}>
+                  <td style={td}>{d.eventType}</td>
+                  <td style={td}>{d.subscriber}</td>
+                  <td
+                    style={{
+                      ...td,
+                      color: statusColor(d.status),
+                      fontWeight: 600,
+                    }}
+                  >
+                    {d.status}
+                  </td>
+                  <td style={td}>{d.attemptCount}</td>
+                  <td style={td}>{new Date(d.createdAt).toLocaleString()}</td>
+                  <td style={td}>
+                    {d.completedAt
+                      ? new Date(d.completedAt).toLocaleString()
+                      : "—"}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -149,4 +149,43 @@ app.MapGet("/delivery-attempts", async (AppDbContext db) =>
     return attempts;
 });
 
+app.MapGet("/deliveries", async (AppDbContext db) =>
+{
+    var rows = await (
+        from d in db.Deliveries
+        join e in db.Events on d.EventId equals e.Id into events
+        from e in events.DefaultIfEmpty()
+        join s in db.Subscriptions on d.SubscriptionId equals s.Id into subs
+        from s in subs.DefaultIfEmpty()
+        orderby d.CreatedAt descending
+        select new
+        {
+            d.Id,
+            EventType = e != null ? e.EventType : "(deleted event)",
+            Subscriber = s != null ? s.Name : "(deleted subscriber)",
+            d.Status,
+            d.AttemptCount,
+            d.NextAttemptAt,
+            d.CreatedAt,
+            d.CompletedAt
+        }
+    ).ToListAsync();
+
+    // Status is an enum stored as a number; turn it into a readable word
+    // for the dashboard. We do this in memory, after the DB query.
+    var result = rows.Select(r => new
+    {
+        r.Id,
+        r.EventType,
+        r.Subscriber,
+        Status = r.Status.ToString(),
+        r.AttemptCount,
+        r.NextAttemptAt,
+        r.CreatedAt,
+        r.CompletedAt
+    });
+
+    return Results.Ok(result);
+});
+
 app.Run();
