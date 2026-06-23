@@ -1,35 +1,40 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using WebhookApi.Data;
 using WebhookApi.Models;
-using System.Security.Cryptography;
+using WebhookApi.Services;
 
 namespace WebhookApi.Workers;
 
 public class DeliveryWorker : BackgroundService
 {
     private const int MaxAttempts = 5;
-    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly DeliveryScheduler _scheduler;
     private readonly ILogger<DeliveryWorker> _logger;
 
     public DeliveryWorker(
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
+        DeliveryScheduler scheduler,
         ILogger<DeliveryWorker> logger)
     {
         _scopeFactory = scopeFactory;
         _httpClientFactory = httpClientFactory;
+        _scheduler = scheduler;
         _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Delivery worker started.");
+        await SeedScheduleFromDatabaseAsync(stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -50,7 +55,26 @@ public class DeliveryWorker : BackgroundService
         }
     }
 
-    // 1. Turn each new event into one Delivery per matching subscriber.
+    // SAFETY NET: rebuild the Redis schedule from Postgres on startup.
+    // If Redis was lost, every Pending delivery still in the DB gets re-scheduled.
+    private async Task SeedScheduleFromDatabaseAsync(CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var pending = await db.Deliveries
+            .Where(d => d.Status == DeliveryStatus.Pending)
+            .ToListAsync(ct);
+
+        foreach (var d in pending)
+            await _scheduler.ScheduleAsync(d.Id, d.NextAttemptAt);
+
+        if (pending.Count > 0)
+            _logger.LogInformation("Seeded {Count} pending deliveries into Redis.", pending.Count);
+    }
+
+    // Turn each new event into one Delivery per matching subscriber,
+    // then SCHEDULE each delivery in Redis (instead of waiting for a poll).
     private async Task FanOutNewEventsAsync(AppDbContext db, CancellationToken ct)
     {
         var newEvents = await db.Events
@@ -65,7 +89,7 @@ public class DeliveryWorker : BackgroundService
 
             foreach (var sub in subscribers)
             {
-                db.Deliveries.Add(new Delivery
+                var delivery = new Delivery
                 {
                     Id = Guid.NewGuid(),
                     EventId = ev.Id,
@@ -74,26 +98,36 @@ public class DeliveryWorker : BackgroundService
                     AttemptCount = 0,
                     NextAttemptAt = DateTime.UtcNow,
                     CreatedAt = DateTime.UtcNow
-                });
+                };
+                db.Deliveries.Add(delivery);
+                await _scheduler.ScheduleAsync(delivery.Id, delivery.NextAttemptAt);
             }
 
-            ev.ProcessedAt = DateTime.UtcNow; // "fanned out", not "delivered"
+            ev.ProcessedAt = DateTime.UtcNow;
         }
 
         if (newEvents.Count > 0)
             await db.SaveChangesAsync(ct);
     }
 
-    // 2. Attempt every delivery that's due; retry with backoff or dead-letter.
+    // Ask REDIS which deliveries are due, then load and process those rows from Postgres.
     private async Task ProcessDueDeliveriesAsync(AppDbContext db, CancellationToken ct)
     {
-        var now = DateTime.UtcNow;
-        var due = await db.Deliveries
-            .Where(d => d.Status == DeliveryStatus.Pending && d.NextAttemptAt <= now)
-            .ToListAsync(ct);
+        var dueIds = await _scheduler.GetDueAsync(50);
+        if (dueIds.Count == 0)
+            return;
 
-        foreach (var delivery in due)
+        foreach (var id in dueIds)
         {
+            var delivery = await db.Deliveries.FindAsync(new object[] { id }, ct);
+
+            // If it's gone or already finished, just drop it from the set.
+            if (delivery is null || delivery.Status != DeliveryStatus.Pending)
+            {
+                await _scheduler.RemoveAsync(id);
+                continue;
+            }
+
             var ev = await db.Events.FindAsync(new object[] { delivery.EventId }, ct);
             var sub = await db.Subscriptions.FindAsync(new object[] { delivery.SubscriptionId }, ct);
 
@@ -101,6 +135,7 @@ public class DeliveryWorker : BackgroundService
             {
                 delivery.Status = DeliveryStatus.DeadLettered;
                 delivery.CompletedAt = DateTime.UtcNow;
+                await _scheduler.RemoveAsync(id);
                 continue;
             }
 
@@ -112,25 +147,27 @@ public class DeliveryWorker : BackgroundService
             {
                 delivery.Status = DeliveryStatus.Delivered;
                 delivery.CompletedAt = DateTime.UtcNow;
-                _logger.LogInformation("Delivery {Id} succeeded on attempt {N}.", delivery.Id, delivery.AttemptCount);
+                await _scheduler.RemoveAsync(id);
+                _logger.LogInformation("Delivery {Id} succeeded on attempt {N}.", id, delivery.AttemptCount);
             }
             else if (delivery.AttemptCount >= MaxAttempts)
             {
                 delivery.Status = DeliveryStatus.DeadLettered;
                 delivery.CompletedAt = DateTime.UtcNow;
-                _logger.LogWarning("Delivery {Id} dead-lettered after {N} attempts.", delivery.Id, delivery.AttemptCount);
+                await _scheduler.RemoveAsync(id);
+                _logger.LogWarning("Delivery {Id} dead-lettered after {N} attempts.", id, delivery.AttemptCount);
             }
             else
             {
                 var delay = TimeSpan.FromSeconds(Math.Pow(2, delivery.AttemptCount));
                 delivery.NextAttemptAt = DateTime.UtcNow.Add(delay);
+                await _scheduler.ScheduleAsync(id, delivery.NextAttemptAt); // reschedule = re-add with new score
                 _logger.LogInformation("Delivery {Id} failed attempt {N}, retrying in {Delay}s.",
-                    delivery.Id, delivery.AttemptCount, delay.TotalSeconds);
+                    id, delivery.AttemptCount, delay.TotalSeconds);
             }
         }
 
-        if (due.Count > 0)
-            await db.SaveChangesAsync(ct);
+        await db.SaveChangesAsync(ct);
     }
 
     private async Task<(bool success, DeliveryAttempt attempt)> AttemptDeliveryAsync(

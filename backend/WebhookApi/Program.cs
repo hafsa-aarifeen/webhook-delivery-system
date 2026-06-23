@@ -6,6 +6,7 @@ using WebhookApi.Filters;
 using WebhookApi.Workers;
 using System.Security.Cryptography;
 using StackExchange.Redis;
+using WebhookApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,6 +18,7 @@ builder.Services.AddHostedService<DeliveryWorker>();
 builder.Services.AddSingleton<IConnectionMultiplexer>(
     ConnectionMultiplexer.Connect(
         builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379"));
+builder.Services.AddSingleton<DeliveryScheduler>();
 
 builder.Services.AddCors(options =>
 {
