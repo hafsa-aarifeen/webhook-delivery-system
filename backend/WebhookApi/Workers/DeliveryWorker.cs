@@ -17,17 +17,20 @@ public class DeliveryWorker : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly DeliveryScheduler _scheduler;
+    private readonly SubscriptionCache _subscriptionCache;
     private readonly ILogger<DeliveryWorker> _logger;
 
     public DeliveryWorker(
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
         DeliveryScheduler scheduler,
+        SubscriptionCache subscriptionCache,
         ILogger<DeliveryWorker> logger)
     {
         _scopeFactory = scopeFactory;
         _httpClientFactory = httpClientFactory;
         _scheduler = scheduler;
+        _subscriptionCache = subscriptionCache;
         _logger = logger;
     }
 
@@ -83,17 +86,16 @@ public class DeliveryWorker : BackgroundService
 
         foreach (var ev in newEvents)
         {
-            var subscribers = await db.Subscriptions
-                .Where(s => s.IsActive && s.EventType == ev.EventType)
-                .ToListAsync(ct);
+            var subscriberIds = await _subscriptionCache
+                .GetActiveSubscriptionIdsAsync(ev.EventType, db, ct);
 
-            foreach (var sub in subscribers)
+            foreach (var subId in subscriberIds)
             {
                 var delivery = new Delivery
                 {
                     Id = Guid.NewGuid(),
                     EventId = ev.Id,
-                    SubscriptionId = sub.Id,
+                    SubscriptionId = subId,
                     Status = DeliveryStatus.Pending,
                     AttemptCount = 0,
                     NextAttemptAt = DateTime.UtcNow,

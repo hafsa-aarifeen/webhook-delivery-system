@@ -19,6 +19,7 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(
     ConnectionMultiplexer.Connect(
         builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379"));
 builder.Services.AddSingleton<DeliveryScheduler>();
+builder.Services.AddSingleton<SubscriptionCache>();
 
 builder.Services.AddCors(options =>
 {
@@ -41,6 +42,18 @@ app.MapGet("/health/redis", async (IConnectionMultiplexer redis) =>
     var db = redis.GetDatabase();
     var latency = await db.PingAsync();
     return Results.Ok(new { redis = "ok", latencyMs = latency.TotalMilliseconds });
+});
+
+app.MapGet("/debug/cache/{eventType}", async (string eventType, IConnectionMultiplexer redis) =>
+{
+    var db = redis.GetDatabase();
+    var cached = await db.StringGetAsync($"subscriptions:active:{eventType}");
+    return Results.Ok(new
+    {
+        eventType,
+        isCached = cached.HasValue,
+        value = cached.HasValue ? cached.ToString() : "(not cached)"
+    });
 });
 
 // --- Events ---
@@ -99,7 +112,7 @@ app.MapGet("/events", async (AppDbContext db) =>
     await db.Events.OrderByDescending(e => e.CreatedAt).ToListAsync());
 
 // --- Subscriptions ---
-app.MapPost("/subscriptions", async (CreateSubscriptionRequest request, AppDbContext db) =>
+app.MapPost("/subscriptions", async (CreateSubscriptionRequest request, AppDbContext db, SubscriptionCache cache) =>
 {
     if (string.IsNullOrWhiteSpace(request.Name) ||
         string.IsNullOrWhiteSpace(request.Url) ||
@@ -127,6 +140,7 @@ app.MapPost("/subscriptions", async (CreateSubscriptionRequest request, AppDbCon
 
     db.Subscriptions.Add(subscription);
     await db.SaveChangesAsync();
+    await cache.InvalidateAsync(subscription.EventType);
 
     return Results.Created($"/subscriptions/{subscription.Id}", subscription);
 });
@@ -144,14 +158,17 @@ app.MapGet("/subscriptions", async (AppDbContext db) =>
         })
         .ToListAsync());
 
-app.MapDelete("/subscriptions/{id:guid}", async (Guid id, AppDbContext db) =>
+app.MapDelete("/subscriptions/{id:guid}", async (Guid id, AppDbContext db, SubscriptionCache cache) =>
 {
     var subscription = await db.Subscriptions.FindAsync(id);
     if (subscription is null)
         return Results.NotFound(new { error = "Subscription not found." });
 
+    var eventType = subscription.EventType;   // capture before removal
     db.Subscriptions.Remove(subscription);
     await db.SaveChangesAsync();
+    await cache.InvalidateAsync(eventType);
+
     return Results.NoContent();
 });
 
