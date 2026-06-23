@@ -5,6 +5,7 @@ using WebhookApi.Dtos;
 using WebhookApi.Filters;
 using WebhookApi.Workers;
 using System.Security.Cryptography;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,6 +14,9 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 builder.Services.AddHttpClient();
 builder.Services.AddHostedService<DeliveryWorker>();
+builder.Services.AddSingleton<IConnectionMultiplexer>(
+    ConnectionMultiplexer.Connect(
+        builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379"));
 
 builder.Services.AddCors(options =>
 {
@@ -30,11 +34,40 @@ app.UseCors("AllowFrontend");
 
 app.MapGet("/health", () => new { status = "ok" });
 
+app.MapGet("/health/redis", async (IConnectionMultiplexer redis) =>
+{
+    var db = redis.GetDatabase();
+    var latency = await db.PingAsync();
+    return Results.Ok(new { redis = "ok", latencyMs = latency.TotalMilliseconds });
+});
+
 // --- Events ---
-app.MapPost("/events", async (CreateEventRequest request, AppDbContext db) =>
+app.MapPost("/events", async (
+    CreateEventRequest request,
+    HttpContext context,
+    AppDbContext db,
+    IConnectionMultiplexer redis) =>
 {
     if (string.IsNullOrWhiteSpace(request.EventType))
         return Results.BadRequest(new { error = "EventType is required." });
+
+    var idempotencyKey = context.Request.Headers["Idempotency-Key"].ToString();
+    var redisDb = redis.GetDatabase();
+
+    // Have we seen this key before? If so, return the original event's id.
+    if (!string.IsNullOrWhiteSpace(idempotencyKey))
+    {
+        var existingId = await redisDb.StringGetAsync($"idempotency:{idempotencyKey}");
+        if (existingId.HasValue)
+        {
+            return Results.Ok(new
+            {
+                id = existingId.ToString(),
+                duplicate = true,
+                message = "Event already created with this Idempotency-Key."
+            });
+        }
+    }
 
     var newEvent = new Event
     {
@@ -46,6 +79,15 @@ app.MapPost("/events", async (CreateEventRequest request, AppDbContext db) =>
 
     db.Events.Add(newEvent);
     await db.SaveChangesAsync();
+
+    // Remember this key for 24h so retries don't create duplicates.
+    if (!string.IsNullOrWhiteSpace(idempotencyKey))
+    {
+        await redisDb.StringSetAsync(
+            $"idempotency:{idempotencyKey}",
+            newEvent.Id.ToString(),
+            TimeSpan.FromHours(24));
+    }
 
     return Results.Created($"/events/{newEvent.Id}", newEvent);
 })
