@@ -315,4 +315,26 @@ app.MapGet("/deliveries/{id:guid}/attempts", async (Guid id, AppDbContext db) =>
     return Results.Ok(attempts);
 });
 
+app.MapGet("/deliveries/stats", async (AppDbContext db) =>
+{
+    var total = await db.Deliveries.CountAsync();
+    var delivered = await db.Deliveries.CountAsync(d => d.Status == DeliveryStatus.Delivered);
+    var deadLettered = await db.Deliveries.CountAsync(d => d.Status == DeliveryStatus.DeadLettered);
+    var pending = await db.Deliveries.CountAsync(d => d.Status == DeliveryStatus.Pending);
+
+    // Success rate is measured over SETTLED deliveries only (delivered + dead-lettered).
+    // Pending deliveries haven't finished, so they don't count for or against the rate.
+    var settled = delivered + deadLettered;
+    var successRate = settled == 0 ? 0.0 : Math.Round((double)delivered / settled * 100, 1);
+
+    return Results.Ok(new
+    {
+        total,
+        delivered,
+        deadLettered,
+        pending,
+        successRate
+    });
+});
+
 app.Run();

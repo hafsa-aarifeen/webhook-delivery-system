@@ -48,6 +48,14 @@ interface TimelineAttempt {
   attemptedAt: string;
 }
 
+interface Stats {
+  total: number;
+  delivered: number;
+  deadLettered: number;
+  pending: number;
+  successRate: number;
+}
+
 const API_BASE = "http://localhost:5180";
 
 function App() {
@@ -55,6 +63,7 @@ function App() {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [attempts, setAttempts] = useState<DeliveryAttempt[]>([]);
+  const [stats, setStats] = useState<Stats | null>(null);
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [timelineAttempts, setTimelineAttempts] = useState<TimelineAttempt[]>(
@@ -90,6 +99,12 @@ function App() {
       .then(setAttempts)
       .catch(() => setAttempts([]));
   };
+  const loadStats = () => {
+    fetch(`${API_BASE}/deliveries/stats`)
+      .then((r) => r.json())
+      .then(setStats)
+      .catch(() => setStats(null));
+  };
 
   useEffect(() => {
     const loadAll = () => {
@@ -97,6 +112,7 @@ function App() {
       loadSubscriptions();
       loadDeliveries();
       loadAttempts();
+      loadStats();
     };
     loadAll();
     const interval = setInterval(loadAll, 5000);
@@ -248,6 +264,44 @@ function App() {
               ))}
             </tbody>
           </table>
+        )}
+      </section>
+
+      <section style={{ marginTop: "2rem" }}>
+        <h2>Delivery health</h2>
+        {stats ? (
+          <div style={statsRow}>
+            <div style={statCard}>
+              <div style={statValue}>{stats.total}</div>
+              <div style={statLabel}>Total</div>
+            </div>
+            <div style={statCard}>
+              <div style={{ ...statValue, color: "green" }}>
+                {stats.delivered}
+              </div>
+              <div style={statLabel}>Delivered</div>
+            </div>
+            <div style={statCard}>
+              <div style={{ ...statValue, color: "crimson" }}>
+                {stats.deadLettered}
+              </div>
+              <div style={statLabel}>Dead-lettered</div>
+            </div>
+            <div style={statCard}>
+              <div style={{ ...statValue, color: "#b8860b" }}>
+                {stats.pending}
+              </div>
+              <div style={statLabel}>Pending</div>
+            </div>
+            <div style={{ ...statCard, ...successCard }}>
+              <div style={{ ...statValue, color: "#fff" }}>
+                {stats.successRate}%
+              </div>
+              <div style={{ ...statLabel, color: "#dff5ec" }}>Success rate</div>
+            </div>
+          </div>
+        ) : (
+          <p>No stats yet.</p>
         )}
       </section>
 
@@ -426,6 +480,35 @@ const hint: CSSProperties = {
   margin: "0 0 0.5rem",
   color: "#888",
   fontSize: "0.85rem",
+};
+const statsRow: CSSProperties = {
+  display: "flex",
+  gap: "12px",
+  flexWrap: "wrap",
+};
+const statCard: CSSProperties = {
+  flex: "1 1 120px",
+  border: "1px solid #e2e8e8",
+  borderRadius: 8,
+  padding: "16px",
+  textAlign: "center",
+  background: "#fafbfb",
+};
+const successCard: CSSProperties = {
+  background: "#2e7d8a",
+  border: "1px solid #2e7d8a",
+};
+const statValue: CSSProperties = {
+  fontSize: "1.8rem",
+  fontWeight: 700,
+  lineHeight: 1.1,
+};
+const statLabel: CSSProperties = {
+  marginTop: "4px",
+  fontSize: "0.8rem",
+  color: "#667",
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
 };
 const timelineCell: CSSProperties = {
   background: "#f7fafa",
