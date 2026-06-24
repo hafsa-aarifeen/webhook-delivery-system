@@ -112,6 +112,11 @@ function App() {
     loadSubscriptions();
   };
 
+  const handleRetry = async (id: string) => {
+    await fetch(`${API_BASE}/deliveries/${id}/retry`, { method: "POST" });
+    loadDeliveries();
+  };
+
   const statusColor = (status: string): string => {
     if (status === "Delivered") return "green";
     if (status === "DeadLettered") return "crimson";
@@ -229,6 +234,7 @@ function App() {
                 <th style={th}>Attempts</th>
                 <th style={th}>Created</th>
                 <th style={th}>Completed</th>
+                <th style={th}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -251,6 +257,18 @@ function App() {
                     {d.completedAt
                       ? new Date(d.completedAt).toLocaleString()
                       : "—"}
+                  </td>
+                  <td style={td}>
+                    {d.status === "DeadLettered" ? (
+                      <button
+                        style={retryButton}
+                        onClick={() => handleRetry(d.id)}
+                      >
+                        Retry
+                      </button>
+                    ) : (
+                      "—"
+                    )}
                   </td>
                 </tr>
               ))}
@@ -342,6 +360,14 @@ const deleteButton: CSSProperties = {
   borderRadius: 4,
   background: "#fff",
   color: "crimson",
+  cursor: "pointer",
+};
+const retryButton: CSSProperties = {
+  padding: "4px 10px",
+  border: "1px solid #2e7d8a",
+  borderRadius: 4,
+  background: "#2e7d8a",
+  color: "#fff",
   cursor: "pointer",
 };
 

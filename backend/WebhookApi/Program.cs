@@ -265,4 +265,29 @@ app.MapGet("/deliveries", async (AppDbContext db) =>
     return Results.Ok(result);
 });
 
+app.MapPost("/deliveries/{id:guid}/retry", async (
+    Guid id,
+    AppDbContext db,
+    DeliveryScheduler scheduler) =>
+{
+    var delivery = await db.Deliveries.FindAsync(id);
+    if (delivery is null)
+        return Results.NotFound(new { error = "Delivery not found." });
+
+    // Only dead-lettered deliveries can be manually retried.
+    if (delivery.Status != DeliveryStatus.DeadLettered)
+        return Results.BadRequest(new { error = "Only dead-lettered deliveries can be retried." });
+
+    // Reset it to a fresh pending state and re-schedule it now.
+    delivery.Status = DeliveryStatus.Pending;
+    delivery.AttemptCount = 0;
+    delivery.NextAttemptAt = DateTime.UtcNow;
+    delivery.CompletedAt = null;
+    await db.SaveChangesAsync();
+
+    await scheduler.ScheduleAsync(delivery.Id, delivery.NextAttemptAt);
+
+    return Results.Ok(new { message = "Delivery re-queued for delivery.", deliveryId = delivery.Id });
+});
+
 app.Run();
