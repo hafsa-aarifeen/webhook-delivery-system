@@ -59,6 +59,14 @@ interface Stats {
 const API_BASE = "http://localhost:5180";
 
 function App() {
+  const [token, setToken] = useState<string | null>(() =>
+    localStorage.getItem("token"),
+  );
+
+  const [loginUser, setLoginUser] = useState("");
+  const [loginPass, setLoginPass] = useState("");
+  const [loginError, setLoginError] = useState("");
+
   const [events, setEvents] = useState<EventItem[]>([]);
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
@@ -75,38 +83,82 @@ function App() {
   const [eventType, setEventType] = useState("");
   const [error, setError] = useState("");
 
+  const logout = () => {
+    localStorage.removeItem("token");
+    setToken(null);
+  };
+
+  // Every dashboard request goes through here: it attaches the bearer token,
+  // and if the server says 401 (e.g. token expired) it logs us back out.
+  const authFetch = async (path: string, options: RequestInit = {}) => {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (res.status === 401) {
+      logout();
+    }
+    return res;
+  };
+
+  const handleLogin = async () => {
+    setLoginError("");
+    try {
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: loginUser, password: loginPass }),
+      });
+      if (!res.ok) {
+        setLoginError("Invalid username or password.");
+        return;
+      }
+      const data = await res.json();
+      localStorage.setItem("token", data.token);
+      setToken(data.token);
+      setLoginUser("");
+      setLoginPass("");
+    } catch {
+      setLoginError("Could not reach the server.");
+    }
+  };
+
   const loadSubscriptions = () => {
-    fetch(`${API_BASE}/subscriptions`)
+    authFetch(`/subscriptions`)
       .then((r) => r.json())
       .then(setSubscriptions)
       .catch(() => setSubscriptions([]));
   };
   const loadEvents = () => {
-    fetch(`${API_BASE}/events`)
+    authFetch(`/events`)
       .then((r) => r.json())
       .then(setEvents)
       .catch(() => setEvents([]));
   };
   const loadDeliveries = () => {
-    fetch(`${API_BASE}/deliveries`)
+    authFetch(`/deliveries`)
       .then((r) => r.json())
       .then(setDeliveries)
       .catch(() => setDeliveries([]));
   };
   const loadAttempts = () => {
-    fetch(`${API_BASE}/delivery-attempts`)
+    authFetch(`/delivery-attempts`)
       .then((r) => r.json())
       .then(setAttempts)
       .catch(() => setAttempts([]));
   };
   const loadStats = () => {
-    fetch(`${API_BASE}/deliveries/stats`)
+    authFetch(`/deliveries/stats`)
       .then((r) => r.json())
       .then(setStats)
       .catch(() => setStats(null));
   };
 
   useEffect(() => {
+    if (!token) return;
     const loadAll = () => {
       loadEvents();
       loadSubscriptions();
@@ -117,11 +169,12 @@ function App() {
     loadAll();
     const interval = setInterval(loadAll, 5000);
     return () => clearInterval(interval);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   const handleAddSubscription = async () => {
     setError("");
-    const res = await fetch(`${API_BASE}/subscriptions`, {
+    const res = await authFetch(`/subscriptions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, url, eventType }),
@@ -138,12 +191,12 @@ function App() {
   };
 
   const handleDelete = async (id: string) => {
-    await fetch(`${API_BASE}/subscriptions/${id}`, { method: "DELETE" });
+    await authFetch(`/subscriptions/${id}`, { method: "DELETE" });
     loadSubscriptions();
   };
 
   const handleRetry = async (id: string) => {
-    await fetch(`${API_BASE}/deliveries/${id}/retry`, { method: "POST" });
+    await authFetch(`/deliveries/${id}/retry`, { method: "POST" });
     loadDeliveries();
   };
 
@@ -156,7 +209,7 @@ function App() {
     setExpandedId(id);
     setTimelineAttempts([]);
     try {
-      const res = await fetch(`${API_BASE}/deliveries/${id}/attempts`);
+      const res = await authFetch(`/deliveries/${id}/attempts`);
       const data = await res.json();
       setTimelineAttempts(data);
     } catch {
@@ -170,9 +223,48 @@ function App() {
     return "#b8860b"; // Pending — amber
   };
 
+  // --- Login gate: if not authenticated, show the login form instead. ---
+  if (!token) {
+    return (
+      <div style={loginWrap}>
+        <div style={loginCard}>
+          <h1 style={{ marginTop: 0 }}>Webhook Dashboard</h1>
+          <p style={{ color: "#667", marginTop: 0 }}>Sign in to continue.</p>
+          <input
+            style={{ ...input, width: "100%", marginBottom: "0.75rem" }}
+            placeholder="Username"
+            value={loginUser}
+            onChange={(e) => setLoginUser(e.target.value)}
+          />
+          <input
+            style={{ ...input, width: "100%", marginBottom: "0.75rem" }}
+            type="password"
+            placeholder="Password"
+            value={loginPass}
+            onChange={(e) => setLoginPass(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleLogin();
+            }}
+          />
+          <button style={{ ...button, width: "100%" }} onClick={handleLogin}>
+            Log in
+          </button>
+          {loginError && (
+            <p style={{ color: "crimson", marginBottom: 0 }}>{loginError}</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={page}>
-      <h1>Webhook Delivery System</h1>
+      <div style={headerRow}>
+        <h1 style={{ margin: 0 }}>Webhook Delivery System</h1>
+        <button style={logoutButton} onClick={logout}>
+          Log out
+        </button>
+      </div>
 
       <section style={{ marginTop: "2rem" }}>
         <h2>Add a subscription</h2>
@@ -469,6 +561,27 @@ const page: CSSProperties = {
   maxWidth: 1000,
   margin: "0 auto",
 };
+const headerRow: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+};
+const loginWrap: CSSProperties = {
+  fontFamily: "sans-serif",
+  minHeight: "100vh",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: "#f4f7f7",
+};
+const loginCard: CSSProperties = {
+  background: "#fff",
+  padding: "2rem",
+  borderRadius: 12,
+  border: "1px solid #e2e8e8",
+  width: 320,
+  boxShadow: "0 4px 20px rgba(0,0,0,0.06)",
+};
 const table: CSSProperties = { width: "100%", borderCollapse: "collapse" };
 const th: CSSProperties = {
   textAlign: "left",
@@ -564,6 +677,14 @@ const retryButton: CSSProperties = {
   borderRadius: 4,
   background: "#2e7d8a",
   color: "#fff",
+  cursor: "pointer",
+};
+const logoutButton: CSSProperties = {
+  padding: "8px 16px",
+  border: "1px solid #2e7d8a",
+  borderRadius: 4,
+  background: "#fff",
+  color: "#2e7d8a",
   cursor: "pointer",
 };
 

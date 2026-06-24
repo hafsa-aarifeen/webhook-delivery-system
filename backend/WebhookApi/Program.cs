@@ -7,6 +7,11 @@ using WebhookApi.Workers;
 using System.Security.Cryptography;
 using StackExchange.Redis;
 using WebhookApi.Services;
+using System.Text;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -31,11 +36,57 @@ builder.Services.AddCors(options =>
     });
 });
 
+var jwtKey = builder.Configuration["Jwt:Key"]!;
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"],
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+        };
+    });
+
+builder.Services.AddAuthorization();
+
 var app = builder.Build();
 
 app.UseCors("AllowFrontend");
 
+app.UseAuthentication();
+app.UseAuthorization();
+
 app.MapGet("/health", () => new { status = "ok" });
+
+app.MapPost("/auth/login", (LoginRequest request, IConfiguration config) =>
+{
+    var adminUser = config["DashboardAdmin:Username"];
+    var adminPass = config["DashboardAdmin:Password"];
+
+    // Validate credentials against the configured operator account.
+    if (request.Username != adminUser || request.Password != adminPass)
+        return Results.Unauthorized();
+
+    var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:Key"]!));
+    var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+    var expiryMinutes = int.Parse(config["Jwt:ExpiryMinutes"] ?? "60");
+
+    var token = new JwtSecurityToken(
+        issuer: config["Jwt:Issuer"],
+        audience: config["Jwt:Audience"],
+        claims: new[] { new Claim(ClaimTypes.Name, request.Username) },
+        expires: DateTime.UtcNow.AddMinutes(expiryMinutes),
+        signingCredentials: creds);
+
+    var tokenString = new JwtSecurityTokenHandler().WriteToken(token);
+    return Results.Ok(new { token = tokenString, expiresInMinutes = expiryMinutes });
+});
 
 app.MapGet("/health/redis", async (IConnectionMultiplexer redis) =>
 {
@@ -109,7 +160,8 @@ app.MapPost("/events", async (
 .AddEndpointFilter<ApiKeyEndpointFilter>();
 
 app.MapGet("/events", async (AppDbContext db) =>
-    await db.Events.OrderByDescending(e => e.CreatedAt).ToListAsync());
+    await db.Events.OrderByDescending(e => e.CreatedAt).ToListAsync())
+.RequireAuthorization();
 
 // --- Subscriptions ---
 app.MapPost("/subscriptions", async (CreateSubscriptionRequest request, AppDbContext db, SubscriptionCache cache) =>
@@ -143,7 +195,8 @@ app.MapPost("/subscriptions", async (CreateSubscriptionRequest request, AppDbCon
     await cache.InvalidateAsync(subscription.EventType);
 
     return Results.Created($"/subscriptions/{subscription.Id}", subscription);
-});
+})
+.RequireAuthorization();
 
 app.MapGet("/subscriptions", async (AppDbContext db) =>
     await db.Subscriptions
@@ -156,7 +209,8 @@ app.MapGet("/subscriptions", async (AppDbContext db) =>
             s.IsActive,
             s.CreatedAt
         })
-        .ToListAsync());
+        .ToListAsync())
+.RequireAuthorization();
 
 app.MapDelete("/subscriptions/{id:guid}", async (Guid id, AppDbContext db, SubscriptionCache cache) =>
 {
@@ -170,7 +224,8 @@ app.MapDelete("/subscriptions/{id:guid}", async (Guid id, AppDbContext db, Subsc
     await cache.InvalidateAsync(eventType);
 
     return Results.NoContent();
-});
+})
+.RequireAuthorization();
 
 app.MapPost("/test-receiver", async (HttpContext context, ILogger<Program> logger) =>
 {
@@ -224,7 +279,8 @@ app.MapGet("/delivery-attempts", async (AppDbContext db) =>
     ).ToListAsync();
 
     return attempts;
-});
+})
+.RequireAuthorization();
 
 app.MapGet("/deliveries", async (AppDbContext db) =>
 {
@@ -263,7 +319,8 @@ app.MapGet("/deliveries", async (AppDbContext db) =>
     });
 
     return Results.Ok(result);
-});
+})
+.RequireAuthorization();
 
 app.MapPost("/deliveries/{id:guid}/retry", async (
     Guid id,
@@ -288,7 +345,8 @@ app.MapPost("/deliveries/{id:guid}/retry", async (
     await scheduler.ScheduleAsync(delivery.Id, delivery.NextAttemptAt);
 
     return Results.Ok(new { message = "Delivery re-queued for delivery.", deliveryId = delivery.Id });
-});
+})
+.RequireAuthorization();
 
 app.MapGet("/deliveries/{id:guid}/attempts", async (Guid id, AppDbContext db) =>
 {
@@ -313,7 +371,8 @@ app.MapGet("/deliveries/{id:guid}/attempts", async (Guid id, AppDbContext db) =>
         .ToListAsync();
 
     return Results.Ok(attempts);
-});
+})
+.RequireAuthorization();
 
 app.MapGet("/deliveries/stats", async (AppDbContext db) =>
 {
@@ -335,6 +394,7 @@ app.MapGet("/deliveries/stats", async (AppDbContext db) =>
         pending,
         successRate
     });
-});
+})
+.RequireAuthorization();
 
 app.Run();
