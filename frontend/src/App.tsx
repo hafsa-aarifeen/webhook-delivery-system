@@ -39,6 +39,15 @@ interface Delivery {
   completedAt: string | null;
 }
 
+interface TimelineAttempt {
+  attemptNumber: number;
+  success: boolean;
+  statusCode: number | null;
+  errorMessage: string | null;
+  durationMs: number;
+  attemptedAt: string;
+}
+
 const API_BASE = "http://localhost:5180";
 
 function App() {
@@ -46,6 +55,11 @@ function App() {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [attempts, setAttempts] = useState<DeliveryAttempt[]>([]);
+
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [timelineAttempts, setTimelineAttempts] = useState<TimelineAttempt[]>(
+    [],
+  );
 
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
@@ -115,6 +129,23 @@ function App() {
   const handleRetry = async (id: string) => {
     await fetch(`${API_BASE}/deliveries/${id}/retry`, { method: "POST" });
     loadDeliveries();
+  };
+
+  const toggleTimeline = async (id: string) => {
+    if (expandedId === id) {
+      setExpandedId(null);
+      setTimelineAttempts([]);
+      return;
+    }
+    setExpandedId(id);
+    setTimelineAttempts([]);
+    try {
+      const res = await fetch(`${API_BASE}/deliveries/${id}/attempts`);
+      const data = await res.json();
+      setTimelineAttempts(data);
+    } catch {
+      setTimelineAttempts([]);
+    }
   };
 
   const statusColor = (status: string): string => {
@@ -222,6 +253,7 @@ function App() {
 
       <section style={{ marginTop: "2rem" }}>
         <h2>Deliveries ({deliveries.length})</h2>
+        <p style={hint}>Click a row to see its attempt timeline.</p>
         {deliveries.length === 0 ? (
           <p>No deliveries yet.</p>
         ) : (
@@ -239,38 +271,93 @@ function App() {
             </thead>
             <tbody>
               {deliveries.map((d) => (
-                <tr key={d.id}>
-                  <td style={td}>{d.eventType}</td>
-                  <td style={td}>{d.subscriber}</td>
-                  <td
-                    style={{
-                      ...td,
-                      color: statusColor(d.status),
-                      fontWeight: 600,
-                    }}
-                  >
-                    {d.status}
-                  </td>
-                  <td style={td}>{d.attemptCount}</td>
-                  <td style={td}>{new Date(d.createdAt).toLocaleString()}</td>
-                  <td style={td}>
-                    {d.completedAt
-                      ? new Date(d.completedAt).toLocaleString()
-                      : "—"}
-                  </td>
-                  <td style={td}>
-                    {d.status === "DeadLettered" ? (
-                      <button
-                        style={retryButton}
-                        onClick={() => handleRetry(d.id)}
-                      >
-                        Retry
-                      </button>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                </tr>
+                <>
+                  <tr key={d.id}>
+                    <td
+                      style={{ ...td, cursor: "pointer", userSelect: "none" }}
+                      onClick={() => toggleTimeline(d.id)}
+                    >
+                      <span style={{ color: "#2e7d8a", fontWeight: 700 }}>
+                        {expandedId === d.id ? "▼ " : "▶ "}
+                      </span>
+                      {d.eventType}
+                    </td>
+                    <td style={td}>{d.subscriber}</td>
+                    <td
+                      style={{
+                        ...td,
+                        color: statusColor(d.status),
+                        fontWeight: 600,
+                      }}
+                    >
+                      {d.status}
+                    </td>
+                    <td style={td}>{d.attemptCount}</td>
+                    <td style={td}>{new Date(d.createdAt).toLocaleString()}</td>
+                    <td style={td}>
+                      {d.completedAt
+                        ? new Date(d.completedAt).toLocaleString()
+                        : "—"}
+                    </td>
+                    <td style={td}>
+                      {d.status === "DeadLettered" ? (
+                        <button
+                          style={retryButton}
+                          onClick={() => handleRetry(d.id)}
+                        >
+                          Retry
+                        </button>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+                  {expandedId === d.id && (
+                    <tr key={d.id + "-timeline"}>
+                      <td colSpan={7} style={timelineCell}>
+                        {timelineAttempts.length === 0 ? (
+                          <p style={{ margin: 0, color: "#777" }}>
+                            Loading attempts…
+                          </p>
+                        ) : (
+                          <div style={timeline}>
+                            {timelineAttempts.map((a, i) => (
+                              <div key={i} style={timelineItem}>
+                                <span
+                                  style={{
+                                    ...dot,
+                                    background: a.success ? "green" : "crimson",
+                                  }}
+                                />
+                                <span style={{ fontWeight: 600 }}>
+                                  Attempt {a.attemptNumber}
+                                </span>
+                                <span
+                                  style={{
+                                    color: a.success ? "green" : "crimson",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  {a.success ? "Success" : "Failed"}
+                                </span>
+                                <span style={{ color: "#555" }}>
+                                  {a.statusCode ??
+                                    (a.errorMessage ? "error" : "-")}
+                                </span>
+                                <span style={{ color: "#555" }}>
+                                  {a.durationMs} ms
+                                </span>
+                                <span style={{ color: "#999" }}>
+                                  {new Date(a.attemptedAt).toLocaleString()}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </>
               ))}
             </tbody>
           </table>
@@ -335,6 +422,32 @@ const th: CSSProperties = {
   padding: "8px",
 };
 const td: CSSProperties = { borderBottom: "1px solid #eee", padding: "8px" };
+const hint: CSSProperties = {
+  margin: "0 0 0.5rem",
+  color: "#888",
+  fontSize: "0.85rem",
+};
+const timelineCell: CSSProperties = {
+  background: "#f7fafa",
+  padding: "12px 16px",
+  borderBottom: "1px solid #eee",
+};
+const timeline: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "8px",
+};
+const timelineItem: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "16px",
+};
+const dot: CSSProperties = {
+  width: 10,
+  height: 10,
+  borderRadius: "50%",
+  display: "inline-block",
+};
 const formRow: CSSProperties = {
   display: "flex",
   gap: "0.5rem",

@@ -290,4 +290,29 @@ app.MapPost("/deliveries/{id:guid}/retry", async (
     return Results.Ok(new { message = "Delivery re-queued for delivery.", deliveryId = delivery.Id });
 });
 
+app.MapGet("/deliveries/{id:guid}/attempts", async (Guid id, AppDbContext db) =>
+{
+    var delivery = await db.Deliveries.FindAsync(id);
+    if (delivery is null)
+        return Results.NotFound(new { error = "Delivery not found." });
+
+    // Attempts don't store a DeliveryId, so match on the event + subscriber pair,
+    // oldest first so the timeline reads top-to-bottom in order.
+    var attempts = await db.DeliveryAttempts
+        .Where(a => a.EventId == delivery.EventId && a.SubscriptionId == delivery.SubscriptionId)
+        .OrderBy(a => a.AttemptedAt)
+        .Select(a => new
+        {
+            a.AttemptNumber,
+            a.Success,
+            a.StatusCode,
+            a.ErrorMessage,
+            a.DurationMs,
+            a.AttemptedAt
+        })
+        .ToListAsync();
+
+    return Results.Ok(attempts);
+});
+
 app.Run();
