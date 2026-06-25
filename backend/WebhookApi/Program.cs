@@ -26,11 +26,17 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(
 builder.Services.AddSingleton<DeliveryScheduler>();
 builder.Services.AddSingleton<SubscriptionCache>();
 
+// Allowed frontend origins come from config in production (comma-separated),
+// and fall back to the local Vite dev server when nothing is set.
+var allowedOrigins = builder.Configuration["AllowedOrigins"]?.Split(
+        ',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    ?? new[] { "http://localhost:5173" };
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:5173")
+        policy.WithOrigins(allowedOrigins)
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
