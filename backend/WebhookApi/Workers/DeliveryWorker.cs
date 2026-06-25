@@ -11,7 +11,6 @@ namespace WebhookApi.Workers;
 
 public class DeliveryWorker : BackgroundService
 {
-    private const int MaxAttempts = 5;
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
 
     private readonly IServiceScopeFactory _scopeFactory;
@@ -145,14 +144,16 @@ public class DeliveryWorker : BackgroundService
             var (success, attempt) = await AttemptDeliveryAsync(ev, sub, delivery.AttemptCount, ct);
             db.DeliveryAttempts.Add(attempt);
 
-            if (success)
+            var decision = DeliveryPolicy.Decide(delivery.AttemptCount, success);
+
+            if (decision.Status == DeliveryStatus.Delivered)
             {
                 delivery.Status = DeliveryStatus.Delivered;
                 delivery.CompletedAt = DateTime.UtcNow;
                 await _scheduler.RemoveAsync(id);
                 _logger.LogInformation("Delivery {Id} succeeded on attempt {N}.", id, delivery.AttemptCount);
             }
-            else if (delivery.AttemptCount >= MaxAttempts)
+            else if (decision.Status == DeliveryStatus.DeadLettered)
             {
                 delivery.Status = DeliveryStatus.DeadLettered;
                 delivery.CompletedAt = DateTime.UtcNow;
@@ -161,11 +162,10 @@ public class DeliveryWorker : BackgroundService
             }
             else
             {
-                var delay = TimeSpan.FromSeconds(Math.Pow(2, delivery.AttemptCount));
-                delivery.NextAttemptAt = DateTime.UtcNow.Add(delay);
-                await _scheduler.ScheduleAsync(id, delivery.NextAttemptAt); // reschedule = re-add with new score
+                delivery.NextAttemptAt = DateTime.UtcNow.Add(decision.RetryDelay!.Value);
+                await _scheduler.ScheduleAsync(id, delivery.NextAttemptAt);
                 _logger.LogInformation("Delivery {Id} failed attempt {N}, retrying in {Delay}s.",
-                    id, delivery.AttemptCount, delay.TotalSeconds);
+                    id, delivery.AttemptCount, decision.RetryDelay.Value.TotalSeconds);
             }
         }
 
