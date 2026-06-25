@@ -30,6 +30,7 @@ This system treats every delivery as an obligation that must reach a terminal st
 - **Full delivery observability** — a React dashboard shows subscriptions, events, per-subscriber delivery status, an expandable attempt timeline, and live success-rate stats.
 - **Tested and CI-gated** — the retry/backoff/dead-letter logic is unit-tested with xUnit, and GitHub Actions builds and runs the tests on every push.
 
+<img src="assets/01.png" alt="App screenshot" width="400"> <img src="assets/02.png" alt="App screenshot" width="400">
 ---
 
 ## Architecture
