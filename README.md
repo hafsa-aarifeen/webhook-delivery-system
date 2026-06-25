@@ -48,7 +48,7 @@ flowchart TD
     Worker -->|5. signed HTTP POST| Subscriber[Subscriber endpoint]
 
     Subscriber -->|2xx| Delivered[Status: Delivered]
-    Subscriber -->|4xx / 5xx / timeout| Decision{attempts < max?}
+    Subscriber -->|4xx / 5xx / timeout| Decision{attempts under max?}
     Decision -->|yes: reschedule in 2^n s| Redis
     Decision -->|no| Dead[Status: DeadLettered]
 
